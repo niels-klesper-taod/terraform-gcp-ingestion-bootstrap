@@ -495,12 +495,12 @@ done
 ### Create the Workload Identity pool and provider
 
 ```bash
-gcloud iam workload-identity-pools create dev-github-pool \
+gcloud iam workload-identity-pools create dev-cicd-pool \
   --project=${PROJECT_ID} --location=global
 
 gcloud iam workload-identity-pools providers create-oidc bootstrap-github-provider \
   --project=${PROJECT_ID} \
-  --workload-identity-pool=dev-github-pool \
+  --workload-identity-pool=dev-cicd-pool \
   --location=global \
   --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository" \
   --attribute-condition="assertion.repository_owner == 'niels-klesper-taod'" \
@@ -514,7 +514,7 @@ PROJECT_NUMBER=$(gcloud projects describe ${PROJECT_ID} --format='value(projectN
 
 gcloud iam service-accounts add-iam-policy-binding ${SA_EMAIL} \
   --role=roles/iam.workloadIdentityUser \
-  --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/dev-github-pool/attribute.repository/niels-klesper-taod/terraform-gcp-ingestion-bootstrap"
+  --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/dev-cicd-pool/attribute.repository/niels-klesper-taod/terraform-gcp-ingestion-bootstrap"
 ```
 
 ### Configure GitHub secrets
@@ -526,7 +526,7 @@ Set the following repository secrets (used by the workflows):
   ```bash
   gcloud iam workload-identity-pools providers describe bootstrap-github-provider \
     --project=${PROJECT_ID} \
-    --workload-identity-pool=dev-github-pool \
+    --workload-identity-pool=dev-cicd-pool \
     --location=global \
     --format='value(name)'
   ```

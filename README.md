@@ -100,6 +100,11 @@ Enables keyless authentication from GitHub Actions:
 - **Configured for**: Your features repository
 - **Security**: Restricted to specific repository owner
 
+> **Note:** The CI/CD pipeline for *this* repository uses a **separate** Workload Identity
+> pool and provider (`{env}-cicd-pool` / `bootstrap-github-provider`), created during the
+> bootstrap (see [docs/BOOTSTRAP.md](docs/BOOTSTRAP.md)). That provider must exist *before*
+> Terraform can run, so it is managed out-of-band rather than by `main.tf`.
+
 ## Quick Start
 
 ### Prerequisites
