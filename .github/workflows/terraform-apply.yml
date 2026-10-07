@@ -1,0 +1,66 @@
+name: Terraform Apply
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - terraform/**
+      - .github/workflows/terraform-apply.yml
+      - .github/actions/**
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  apply:
+    name: Apply (${{ matrix.environment }})
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ matrix.environment }}
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: ${{ fromJSON(vars.TF_ENVIRONMENTS || '["dev"]') }}
+    concurrency:
+      group: terraform-apply-${{ matrix.environment }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Setup Terraform
+        uses: ./.github/actions/terraform-setup
+        with:
+          environment: ${{ matrix.environment }}
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account_email: ${{ secrets.SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Terraform Plan
+        working-directory: terraform
+        run: |
+          terraform plan \
+            -input=false \
+            -no-color \
+            -var-file="environment/${{ matrix.environment }}.tfvars" \
+            -out="tfplan-${{ matrix.environment }}.binary"
+
+      - name: Terraform Apply
+        working-directory: terraform
+        run: |
+          terraform apply \
+            -input=false \
+            -no-color \
+            "tfplan-${{ matrix.environment }}.binary"
+
+      - name: Collect outputs
+        working-directory: terraform
+        run: terraform output -json > "outputs-${{ matrix.environment }}.json"
+
+      - name: Upload outputs
+        uses: actions/upload-artifact@v4.4.3
+        with:
+          name: outputs-${{ matrix.environment }}
+          path: terraform/outputs-${{ matrix.environment }}.json
+          retention-days: 30

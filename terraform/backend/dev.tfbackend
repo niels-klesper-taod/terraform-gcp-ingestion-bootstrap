@@ -1,0 +1,2 @@
+bucket = "terraform-state-taod-bi-platform-yad"
+prefix = "base/dev"

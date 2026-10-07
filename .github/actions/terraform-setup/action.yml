@@ -1,0 +1,46 @@
+name: Terraform Setup
+description: >-
+  Install Terraform, authenticate to GCP via Workload Identity Federation (OIDC),
+  and initialize the Terraform backend for a given environment.
+
+inputs:
+  environment:
+    description: Environment name (e.g. "dev"). Used to select the backend config file.
+    required: true
+  workload_identity_provider:
+    description: GCP Workload Identity Provider resource name (secret).
+    required: true
+  service_account_email:
+    description: GCP service account email to impersonate (secret).
+    required: true
+  terraform_version:
+    description: Terraform version to install.
+    required: false
+    default: "1.5.7"
+  tf_dir:
+    description: Terraform working directory (relative to repo root).
+    required: false
+    default: "terraform"
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3.1.2
+      with:
+        terraform_version: ${{ inputs.terraform_version }}
+        terraform_wrapper: false
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2.3.0
+      with:
+        workload_identity_provider: ${{ inputs.workload_identity_provider }}
+        service_account: ${{ inputs.service_account_email }}
+
+    - name: Terraform Init
+      shell: bash
+      working-directory: ${{ inputs.tf_dir }}
+      run: |
+        terraform init \
+          -input=false \
+          -backend-config="backend/${{ inputs.environment }}.tfbackend"

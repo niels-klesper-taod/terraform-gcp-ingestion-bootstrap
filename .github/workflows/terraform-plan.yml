@@ -1,0 +1,131 @@
+name: Terraform Plan
+
+on:
+  pull_request:
+    paths:
+      - terraform/**
+      - .github/workflows/terraform-plan.yml
+      - .github/actions/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+
+jobs:
+  plan:
+    name: Plan (${{ matrix.environment }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: ${{ fromJSON(vars.TF_ENVIRONMENTS || '["dev"]') }}
+    concurrency:
+      group: terraform-plan-${{ matrix.environment }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Setup Terraform
+        uses: ./.github/actions/terraform-setup
+        with:
+          environment: ${{ matrix.environment }}
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account_email: ${{ secrets.SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Terraform Format Check
+        working-directory: terraform
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Validate
+        working-directory: terraform
+        run: terraform validate -no-color
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: terraform
+        run: |
+          set +e
+          terraform plan \
+            -input=false \
+            -no-color \
+            -var-file="environment/${{ matrix.environment }}.tfvars" \
+            -out="tfplan-${{ matrix.environment }}.binary" \
+            > "plan-${{ matrix.environment }}.txt" 2>&1
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Post plan to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7.0.1
+        env:
+          PLAN_EXIT: ${{ steps.plan.outputs.exit_code }}
+          ENV: ${{ matrix.environment }}
+        with:
+          script: |
+            const fs = require('fs');
+            const env = process.env.ENV;
+            const planExit = Number(process.env.PLAN_EXIT);
+            const marker = `<!-- terraform-plan-marker: ${env} -->`;
+
+            let planText = '';
+            try { planText = fs.readFileSync(`terraform/plan-${env}.txt`, 'utf8'); } catch (e) {}
+
+            const maxLen = 30000;
+            const truncated = planText.length > maxLen;
+            if (truncated) planText = planText.slice(0, maxLen) + '\n\n... (truncated)';
+
+            const status = planExit === 0
+              ? (planText.includes('No changes.') ? ':white_check_mark: No changes' : ':information_source: Changes detected')
+              : ':x: Plan failed';
+
+            const body = [
+              `### Terraform Plan \`${env}\``,
+              '',
+              `**Status:** ${status}`,
+              '',
+              '<details><summary>Show plan</summary>',
+              '',
+              '```',
+              planText,
+              '```',
+              '</details>',
+              '',
+              marker,
+            ].join('\n');
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number, per_page: 100,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: Upload plan artifact
+        if: steps.plan.outputs.exit_code == '0'
+        uses: actions/upload-artifact@v4.4.3
+        with:
+          name: tfplan-${{ matrix.environment }}
+          path: |
+            terraform/tfplan-${{ matrix.environment }}.binary
+            terraform/plan-${{ matrix.environment }}.txt
+          retention-days: 14
+
+      - name: Fail on plan error
+        if: steps.plan.outputs.exit_code != '0'
+        run: |
+          echo "::error::Terraform plan failed. See the PR comment or logs for details."
+          exit 1

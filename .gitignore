@@ -5,7 +5,9 @@ terraform.tfstate
 terraform.tfstate.backup
 *.tfvars
 !*.tfvars.example
+!terraform/environment/dev.tfvars
 *.tfbackend
+!terraform/backend/dev.tfbackend
 
 # GCP credentials
 *.json

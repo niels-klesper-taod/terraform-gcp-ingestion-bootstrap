@@ -1,0 +1,136 @@
+name: Terraform Drift Detection
+
+on:
+  schedule:
+    # Weekdays (Mon-Fri) at 06:00 UTC
+    - cron: '0 6 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+
+jobs:
+  drift:
+    name: Drift (${{ matrix.environment }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: ${{ fromJSON(vars.TF_ENVIRONMENTS || '["dev"]') }}
+    concurrency:
+      group: terraform-drift-${{ matrix.environment }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Setup Terraform
+        uses: ./.github/actions/terraform-setup
+        with:
+          environment: ${{ matrix.environment }}
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account_email: ${{ secrets.SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Plan (detailed exit code)
+        id: plan
+        working-directory: terraform
+        run: |
+          set +e
+          terraform plan \
+            -input=false \
+            -no-color \
+            -detailed-exitcode \
+            -var-file="environment/${{ matrix.environment }}.tfvars" \
+            > "plan-${{ matrix.environment }}.txt" 2>&1
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Refresh-only plan (real drift)
+        id: refresh
+        working-directory: terraform
+        run: |
+          set +e
+          terraform plan \
+            -input=false \
+            -no-color \
+            -refresh-only \
+            -detailed-exitcode \
+            -var-file="environment/${{ matrix.environment }}.tfvars" \
+            > "refresh-${{ matrix.environment }}.txt" 2>&1
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Evaluate drift and manage issue
+        uses: actions/github-script@v7.0.1
+        env:
+          ENV: ${{ matrix.environment }}
+          PLAN_EXIT: ${{ steps.plan.outputs.exit_code }}
+          REFRESH_EXIT: ${{ steps.refresh.outputs.exit_code }}
+        with:
+          script: |
+            const fs = require('fs');
+            const env = process.env.ENV;
+            const planExit = Number(process.env.PLAN_EXIT);
+            const refreshExit = Number(process.env.REFRESH_EXIT);
+
+            // Exit code 1 means an actual error -> fail the job (red).
+            if (planExit === 1 || refreshExit === 1) {
+              core.setFailed(`terraform plan errored (plan=${planExit}, refresh=${refreshExit}). See logs.`);
+              return;
+            }
+
+            // refresh-only exit 2 = state differs from real world = true external drift.
+            const drift = refreshExit === 2;
+            // normal plan exit 2 without drift = config changed but not yet applied.
+            const pending = !drift && planExit === 2;
+
+            const label = 'drift';
+            const title = `[drift] ${env} environment has configuration drift`;
+
+            const { owner, repo } = context.repo;
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner, repo, state: 'open', labels: label, per_page: 100,
+            });
+            const existing = issues.find(i => i.title === title);
+
+            const truncate = (text, max = 30000) =>
+              text.length <= max ? text : `${text.slice(0, max)}\n\n... (truncated)`;
+
+            if (drift) {
+              const detail = fs.readFileSync(`terraform/refresh-${env}.txt`, 'utf8');
+              const body = [
+                `## Terraform Drift detected (${env})`,
+                '',
+                'Resources differ from the recorded Terraform state (changed **outside of Terraform**).',
+                '',
+                '> **Drift is never auto-applied.** Reconcile manually, e.g. `terraform apply -refresh-only` to update state, or adjust the config and re-apply.',
+                '',
+                '<details><summary>Refresh-only plan</summary>',
+                '',
+                '```',
+                truncate(detail),
+                '```',
+                '</details>',
+              ].join('\n');
+
+              if (existing) {
+                await github.rest.issues.update({ owner, repo, issue_number: existing.number, body });
+                core.notice(`Updated existing drift issue #${existing.number}`);
+              } else {
+                const created = await github.rest.issues.create({ owner, repo, title, body, labels: [label] });
+                core.notice(`Created drift issue #${created.data.number}`);
+              }
+            } else if (pending) {
+              core.notice(`Pending config changes in ${env}, but no external drift (refresh-only clean). No drift issue created.`);
+            } else {
+              core.notice(`No drift detected in ${env}.`);
+              if (existing) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: existing.number,
+                  body: 'Drift resolved — the environment now matches the recorded state. Closing this issue.',
+                });
+                await github.rest.issues.update({ owner, repo, issue_number: existing.number, state: 'closed' });
+                core.notice(`Closed drift issue #${existing.number}`);
+              }
+            }
