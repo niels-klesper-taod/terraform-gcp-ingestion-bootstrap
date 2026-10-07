@@ -11,6 +11,7 @@ terraform.tfstate.backup
 *.json
 !package.json
 !package-lock.json
+!.devcontainer/devcontainer.json
 
 # Python
 __pycache__/

@@ -1,0 +1,39 @@
+{
+  "name": "terraform-gcp-ingestion-bootstrap",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+
+  "workspaceMount": "source=${localWorkspaceFolder},target=${localWorkspaceFolder},type=bind",
+  "workspaceFolder": "${localWorkspaceFolder}",
+
+  "initializeCommand": "mkdir -p \"$HOME/.config/gcloud\"",
+
+  "features": {
+    "ghcr.io/va-h/devcontainers-features/uv:1": {},
+    "ghcr.io/danzilberdan/devcontainers/opencode:0": {},
+    "ghcr.io/devcontainers/features/terraform:1": {
+      "version": "latest",
+      "tflint": "latest"
+    },
+    "ghcr.io/dhoeric/features/google-cloud-cli:1": {
+      "version": "latest"
+    }
+  },
+
+  "mounts": [
+    "source=${localEnv:HOME}/.config/gcloud,target=/home/vscode/.config/gcloud,type=bind",
+    "source=${localEnv:HOME}/Desktop/taod/Intern/Bereichsentwicklung/terraform-gcp-ingestion-bootstrap/.git,target=${localEnv:HOME}/Desktop/taod/Intern/Bereichsentwicklung/terraform-gcp-ingestion-bootstrap/.git,type=bind"
+  ],
+
+  "containerEnv": {
+    "UV_PROJECT_ENVIRONMENT": "/home/vscode/.venv"
+  },
+
+  "remoteEnv": {
+    "OPENROUTER_API_KEY": "${localEnv:OPENROUTER_API_KEY}"
+  },
+
+  "remoteUser": "vscode",
+
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "postStartCommand": "bash .devcontainer/post-start.sh"
+}
