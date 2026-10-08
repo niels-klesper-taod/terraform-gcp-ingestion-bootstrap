@@ -465,6 +465,76 @@ terraform output -json | jq -r '
 
 ---
 
+## CI/CD Setup (OIDC for this Repo)
+
+The GitHub Actions workflows in `.github/workflows/` authenticate to GCP via Workload
+Identity Federation (keyless, no service account keys). This requires a dedicated service
+account and a Workload Identity provider for **this repository** — the provider created by
+the base infrastructure is configured for the *features* repository, not this one.
+
+### Create the CI/CD service account
+
+```bash
+export PROJECT_ID="taod-bi-platform-yad"
+export SA_EMAIL="terraform-bootstrap-cicd@${PROJECT_ID}.iam.gserviceaccount.com"
+
+gcloud iam service-accounts create terraform-bootstrap-cicd \
+  --project=${PROJECT_ID} \
+  --display-name="Terraform bootstrap CI/CD"
+
+for ROLE in \
+  roles/editor \
+  roles/resourcemanager.projectIamAdmin \
+  roles/iam.serviceAccountAdmin \
+  roles/iam.workloadIdentityPoolAdmin; do
+  gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+    --member="serviceAccount:${SA_EMAIL}" --role=${ROLE}
+done
+```
+
+### Create the Workload Identity pool and provider
+
+```bash
+gcloud iam workload-identity-pools create dev-cicd-pool \
+  --project=${PROJECT_ID} --location=global
+
+gcloud iam workload-identity-pools providers create-oidc bootstrap-github-provider \
+  --project=${PROJECT_ID} \
+  --workload-identity-pool=dev-cicd-pool \
+  --location=global \
+  --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository" \
+  --attribute-condition="assertion.repository_owner == 'niels-klesper-taod'" \
+  --issuer-uri="https://token.actions.githubusercontent.com"
+```
+
+### Allow this repo to impersonate the service account
+
+```bash
+PROJECT_NUMBER=$(gcloud projects describe ${PROJECT_ID} --format='value(projectNumber)')
+
+gcloud iam service-accounts add-iam-policy-binding ${SA_EMAIL} \
+  --role=roles/iam.workloadIdentityUser \
+  --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/dev-cicd-pool/attribute.repository/niels-klesper-taod/terraform-gcp-ingestion-bootstrap"
+```
+
+### Configure GitHub secrets
+
+Set the following repository secrets (used by the workflows):
+
+- `WORKLOAD_IDENTITY_PROVIDER`:
+
+  ```bash
+  gcloud iam workload-identity-pools providers describe bootstrap-github-provider \
+    --project=${PROJECT_ID} \
+    --workload-identity-pool=dev-cicd-pool \
+    --location=global \
+    --format='value(name)'
+  ```
+
+- `SERVICE_ACCOUNT_EMAIL`: `terraform-bootstrap-cicd@${PROJECT_ID}.iam.gserviceaccount.com`
+
+---
+
 ## Next Steps
 
 After bootstrap is complete:

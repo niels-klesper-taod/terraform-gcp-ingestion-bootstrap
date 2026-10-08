@@ -1,0 +1,59 @@
+name: Terraform Destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to destroy
+        required: true
+        type: choice
+        options: [dev]
+        default: dev
+      confirm:
+        description: Type exactly "destroy" to confirm (case-sensitive)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  destroy:
+    name: Destroy (${{ github.event.inputs.environment }})
+    if: github.event.inputs.confirm == 'destroy'
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event.inputs.environment }}
+    concurrency:
+      group: terraform-destroy-${{ github.event.inputs.environment }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Setup Terraform
+        uses: ./.github/actions/terraform-setup
+        with:
+          environment: ${{ github.event.inputs.environment }}
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account_email: ${{ secrets.SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Plan destroy
+        working-directory: terraform
+        run: |
+          terraform plan \
+            -destroy \
+            -input=false \
+            -no-color \
+            -var-file="environment/${{ github.event.inputs.environment }}.tfvars"
+
+      - name: Destroy
+        working-directory: terraform
+        run: |
+          terraform destroy \
+            -auto-approve \
+            -input=false \
+            -no-color \
+            -var-file="environment/${{ github.event.inputs.environment }}.tfvars"
